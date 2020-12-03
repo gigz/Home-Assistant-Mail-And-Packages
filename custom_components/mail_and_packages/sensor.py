@@ -1,4 +1,3 @@
-
 """
 Based on @skalavala work at
 https://blog.kalavala.net/usps/homeassistant/mqtt/2018/01/12/usps.html
@@ -930,6 +929,7 @@ def get_items(account, param, fwds=None):
     tfmt = past_date.strftime("%d-%b-%Y")
     deliveriesToday = []
     orderNum = []
+    processedOrderNums = []
     domains = const.Amazon_Domains.split(",")
     _LOGGER.debug("Amazon forward addresses: %s", str(fwds))
     if fwds is not None and fwds != ['""']:
@@ -959,7 +959,7 @@ def get_items(account, param, fwds=None):
             mail_ids = sdata[0]
             id_list = mail_ids.split()
             _LOGGER.debug("Amazon emails found: %s", str(len(id_list)))
-            for i in id_list:
+            for i in reversed(id_list):
                 typ, data = account.fetch(i, "(RFC822)")
                 for response_part in data:
                     if not isinstance(response_part, tuple):
@@ -974,9 +974,17 @@ def get_items(account, param, fwds=None):
                     pattern = re.compile(r"#[0-9]{3}-[0-9]{7}-[0-9]{7}")
                     found = pattern.findall(email_subject)
 
+                    # Skip emails that don't have order number
+                    if len(found) == 0:
+                        continue
+
                     #  Don't add the same order number twice
-                    if len(found) > 0 and found[0] not in orderNum:
+                    if found[0] not in orderNum:
                         orderNum.append(found[0])
+
+                    # If order date is recorded, skip it
+                    if found[0] in processedOrderNums:
+                        continue
 
                     # Catch bad format emails
                     try:
@@ -997,9 +1005,19 @@ def get_items(account, param, fwds=None):
                         )
                         continue
 
-                    if "will arrive:" in email_msg:
-                        start = email_msg.find("will arrive:") + len("will arrive:")
-                        end = email_msg.find("Track your package:")
+                    if "will be delivered today" in email_msg:
+                        processedOrderNums.append(found[0])
+                        email_date = email.utils.parsedate(msg.get('date'))
+                        if (
+                            email_date[2] == datetime.date.today().day
+                            and email_date[1] == datetime.date.today().month
+                        ):
+                            deliveriesToday.append(found[0])
+
+                    elif "Arriving:" in email_msg:
+                        processedOrderNums.append(found[0])
+                        start = email_msg.find("Arriving:") + len("Arriving:")
+                        end = email_msg.find("Track your item(s):")
                         arrive_date = email_msg[start:end].strip()
                         arrive_date = arrive_date.split(" ")
                         arrive_date = arrive_date[0:3]
@@ -1010,9 +1028,10 @@ def get_items(account, param, fwds=None):
                             dateobj.day == datetime.date.today().day
                             and dateobj.month == datetime.date.today().month
                         ):
-                            deliveriesToday.append("Amazon Order")
+                            deliveriesToday.append(found[0])
 
                     elif "estimated delivery date is:" in email_msg:
+                        processedOrderNums.append(found[0])
                         start = email_msg.find("estimated delivery date is:") + len(
                             "estimated delivery date is:"
                         )
@@ -1027,9 +1046,10 @@ def get_items(account, param, fwds=None):
                             dateobj.day == datetime.date.today().day
                             and dateobj.month == datetime.date.today().month
                         ):
-                            deliveriesToday.append("Amazon Order")
+                            deliveriesToday.append(found[0])
 
                     elif "guaranteed delivery date is:" in email_msg:
+                        processedOrderNums.append(found[0])
                         start = email_msg.find("guaranteed delivery date is:") + len(
                             "guaranteed delivery date is:"
                         )
@@ -1044,14 +1064,14 @@ def get_items(account, param, fwds=None):
                             dateobj.day == datetime.date.today().day
                             and dateobj.month == datetime.date.today().month
                         ):
-                            deliveriesToday.append("Amazon Order")
+                            deliveriesToday.append(found[0])
 
     if param == "count":
         _LOGGER.debug("Amazon Count: %s", str(len(deliveriesToday)))
         return len(deliveriesToday)
     elif param == "order":
-        _LOGGER.debug("Amazon order: %s", str(orderNum))
-        return orderNum
+        _LOGGER.debug("Amazon order: %s", str(deliveriesToday))
+        return deliveriesToday
     else:
         _LOGGER.debug("Amazon json: %s", str(deliveriesToday))
         return deliveriesToday
